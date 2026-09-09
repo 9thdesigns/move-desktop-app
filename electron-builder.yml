@@ -1,0 +1,106 @@
+# electron-builder configuration — https://www.electron.build/configuration
+#
+# Artifact names carry no version so the website can link to
+#   https://github.com/9thdesigns/move-desktop-app/releases/latest/download/<artifact>
+# and a new release ships with no Rails deploy:
+#   Move-mac-arm64.dmg  Move-mac-arm64.zip  Move-mac-x64.dmg  Move-mac-x64.zip  latest-mac.yml
+#   Move-win-x64.exe    Move-win-arm64.exe  latest.yml        latest-arm64.yml
+# The win- / mac- infixes keep Windows and macOS artifacts from ever colliding
+# in the same GitHub release.
+
+appId: app.m0ve.desktop
+productName: Move
+copyright: Copyright © 2026 9th Designs LLC
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - src/**/*
+  - package.json
+  - "!**/*.map"
+
+asar: true
+
+# Writes build-info.json into the app and ad-hoc signs unsigned macOS builds.
+afterPack: ./build/afterPack.js
+
+# Where electron-updater looks for new versions. Uploads themselves are done by
+# the release workflow (gh release upload), never by electron-builder, so
+# parallel jobs can't race to create the release.
+publish:
+  provider: github
+  owner: 9thdesigns
+  repo: move-desktop-app
+  releaseType: release
+
+# move-desktop://open?path=/… brings the user back after a browser handoff.
+protocols:
+  - name: Move
+    schemes:
+      - move-desktop
+
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  artifactName: ${productName}-mac-${arch}.${ext}
+  darkModeSupport: true
+  # Developer ID signing + notarization run only when the release workflow
+  # provides CSC_LINK / APPLE_ID…; otherwise the build stays unsigned and
+  # build/afterPack.js ad-hoc signs it so Apple Silicon will launch it.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  extendInfo:
+    NSMicrophoneUsageDescription: Move uses your microphone for huddles and voice channels.
+    NSCameraUsageDescription: Move uses your camera for video in huddles.
+    NSUserNotificationAlertStyle: alert
+
+dmg:
+  artifactName: ${productName}-mac-${arch}.${ext}
+  sign: false
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+win:
+  icon: build/icon-win.png
+  # One installer per architecture. The release workflow runs electron-builder
+  # once per arch (see package.json scripts) so each gets its own update
+  # channel file; a combined multi-arch NSIS build would only ever advertise
+  # the first .exe to electron-updater.
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  artifactName: ${productName}-win-${arch}.${ext}
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  artifactName: ${productName}-win-${arch}.${ext}
+  shortcutName: Move
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+
+# Only used for local config validation (`npm run pack` on Linux); nothing is
+# distributed for Linux.
+linux:
+  target:
+    - dir
+  category: Office
+  icon: build/icon.png

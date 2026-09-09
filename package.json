@@ -1,0 +1,38 @@
+{
+  "name": "move-desktop",
+  "productName": "Move",
+  "version": "0.1.0",
+  "description": "Move for macOS and Windows: a native window around https://m0ve.app",
+  "private": true,
+  "license": "UNLICENSED",
+  "author": {
+    "name": "9th Designs LLC",
+    "url": "https://9thdesigns.com"
+  },
+  "homepage": "https://m0ve.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/9thdesigns/move-desktop-app.git"
+  },
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/navigation.js && node --check src/menu.js && node --check src/updater.js && node --check src/window-state.js && node --check src/permissions.js && node --check src/deep-links.js && node --check build/afterPack.js",
+    "pack": "electron-builder --dir --publish never",
+    "dist:mac": "electron-builder --mac --arm64 --x64 --publish never",
+    "dist:win:x64": "electron-builder --win --x64 --publish never",
+    "dist:win:arm64": "electron-builder --win --arm64 --publish never -c.publish.channel=latest-arm64",
+    "icon": "node scripts/make-icon.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  }
+}
