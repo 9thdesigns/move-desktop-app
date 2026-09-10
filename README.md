@@ -106,17 +106,44 @@ release instead of shipping an untrusted installer).
    10-character value is `APPLE_TEAM_ID`.
 3. **Developer ID Application certificate** (that exact type, not "Mac App
    Distribution" and not "Developer ID Installer"; only the Account Holder
-   can create it). On a Mac: Keychain Access → Certificate Assistant →
-   Request a Certificate From a Certificate Authority → "Saved to disk", then
-   developer.apple.com/account/resources/certificates → + → Developer ID
-   Application → upload the request → download the `.cer` → double-click it
-   so it lands in the login keychain next to its private key.
-4. **Export it as `.p12`**: Keychain Access → My Certificates → right-click
-   "Developer ID Application: 9th Designs LLC (TEAMID)" → Export → choose a
-   strong password. Then:
+   can create it, and a team may hold at most five). It starts from a
+   certificate signing request. On a Mac: Keychain Access → Certificate
+   Assistant → Request a Certificate From a Certificate Authority → "Saved
+   to disk". On any machine with OpenSSL instead:
 
    ```sh
-   base64 -i DeveloperID.p12 | pbcopy   # → CSC_LINK
+   openssl genrsa -out developer-id.key 2048
+   openssl req -new -key developer-id.key -out developer-id.csr \
+     -subj "/emailAddress=you@example.com/CN=9th Designs LLC/C=US"
+   ```
+
+   Then developer.apple.com/account/resources/certificates → + → Developer
+   ID Application → upload the `.csr` → download `developerID_application.cer`.
+   Keep the `.key` file: Apple never has the private key, and a certificate
+   without it is useless (lose it and you revoke and start over).
+4. **Bundle certificate + key as `.p12`**. On a Mac, double-click the `.cer`
+   so it lands next to its key in the login keychain, then Keychain Access →
+   My Certificates → right-click "Developer ID Application: 9th Designs LLC
+   (TEAMID)" → Export → strong password. With OpenSSL, include Apple's
+   intermediate so the chain is complete on the build machine:
+
+   ```sh
+   curl -O https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+   openssl x509 -inform DER -in DeveloperIDG2CA.cer -out DeveloperIDG2CA.pem
+   openssl x509 -inform DER -in developerID_application.cer -out developer-id.pem
+   openssl pkcs12 -export -legacy \
+     -inkey developer-id.key -in developer-id.pem -certfile DeveloperIDG2CA.pem \
+     -name "Developer ID Application: 9th Designs LLC (TEAMID)" \
+     -out DeveloperID.p12
+   ```
+
+   (`-legacy` makes OpenSSL 3 write a `.p12` macOS can import; drop it on
+   OpenSSL 1.1.) Then base64 the file into `CSC_LINK`:
+
+   ```sh
+   base64 -i DeveloperID.p12 | pbcopy          # macOS
+   base64 -w0 DeveloperID.p12                  # Linux
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("DeveloperID.p12")) | Set-Clipboard   # PowerShell
    ```
 
    The export password is `CSC_KEY_PASSWORD`.
