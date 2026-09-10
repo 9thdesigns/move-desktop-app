@@ -88,10 +88,101 @@ Things that each cost a debugging cycle, already handled here:
 - Unsigned macOS builds turn the updater off (`build-info.json`, written by the
   afterPack hook) rather than offering a "Restart Now" that would fail.
 
+### Getting the builds trusted
+
+Both platforms need the same three things: an identity the OS vendor has
+verified, a certificate for that identity that CI can use without the private
+key ever touching this repo, and the secrets below so every tag is signed and
+then *verified* before it is published (a failed verification fails the
+release instead of shipping an untrusted installer).
+
+#### macOS: Gatekeeper opens the app with no warning
+
+1. **Enroll in the Apple Developer Program** (developer.apple.com/programs,
+   US$99/year). Enroll as the organization so the certificate reads
+   "9th Designs LLC" rather than a person's name; that needs the company's
+   D-U-N-S number and takes a day or two to approve.
+2. **Team ID** → developer.apple.com/account → Membership details. The
+   10-character value is `APPLE_TEAM_ID`.
+3. **Developer ID Application certificate** (that exact type, not "Mac App
+   Distribution" and not "Developer ID Installer"; only the Account Holder
+   can create it). On a Mac: Keychain Access → Certificate Assistant →
+   Request a Certificate From a Certificate Authority → "Saved to disk", then
+   developer.apple.com/account/resources/certificates → + → Developer ID
+   Application → upload the request → download the `.cer` → double-click it
+   so it lands in the login keychain next to its private key.
+4. **Export it as `.p12`**: Keychain Access → My Certificates → right-click
+   "Developer ID Application: 9th Designs LLC (TEAMID)" → Export → choose a
+   strong password. Then:
+
+   ```sh
+   base64 -i DeveloperID.p12 | pbcopy   # → CSC_LINK
+   ```
+
+   The export password is `CSC_KEY_PASSWORD`.
+5. **Notarization credentials**: at account.apple.com → Sign-In and Security →
+   App-Specific Passwords → generate one named "move-desktop-notarize". That
+   is `APPLE_APP_SPECIFIC_PASSWORD`; the Apple ID's email is `APPLE_ID`. Make
+   sure the latest Program License Agreement is accepted in the developer
+   account, or notarization is refused with an eligibility error.
+6. **Add the five secrets** at github.com/9thdesigns/move-desktop-app →
+   Settings → Secrets and variables → Actions.
+7. **Push the next tag.** The mac job signs with the hardened runtime and
+   `build/entitlements.mac.plist`, submits both apps to Apple's notary
+   service (usually 2–10 minutes), staples the tickets, and the "Verify
+   signature and notarization" step fails unless `spctl` reports
+   `accepted source=Notarized Developer ID`.
+
+Result: the DMG opens and the app launches with no dialog; the updater is on.
+The certificate lasts five years, the membership renews yearly, and the
+app-specific password never expires unless revoked.
+
+#### Windows: "Verified publisher" in the installer dialog
+
+Since mid-2023 code-signing certificates must keep their private key in
+hardware, so a new certificate cannot be exported as a `.pfx`; the
+`WIN_CSC_LINK` path only fits a certificate you already hold. What works from
+GitHub-hosted runners is **Azure Trusted Signing**, Microsoft's cloud signing
+service, where the key stays in Microsoft's HSM:
+
+1. **Azure subscription and a resource group.** Trusted Signing is offered in
+   a handful of regions (East US, West US 2, West Central US, North Europe,
+   West Europe, …); the region decides the endpoint URL.
+2. **Create a Trusted Signing account** (portal → Trusted Signing Accounts →
+   Create; the Basic SKU is about US$10/month). Its name is
+   `AZURE_TRUSTED_SIGNING_ACCOUNT` and its endpoint (for example
+   `https://eus.codesigning.azure.net`) is `AZURE_TRUSTED_SIGNING_ENDPOINT`.
+3. **Identity validation** inside the account → New → Organization. Needs the
+   legal name, address, a contact email on the company domain, and usually a
+   D-U-N-S number or registration document; Microsoft's verification partner
+   reviews it over a few days. The validated name is what users will see.
+4. **Certificate profile** → Create → type "Public Trust", bound to that
+   identity. Its name is `AZURE_TRUSTED_SIGNING_PROFILE`.
+5. **A service principal for CI**: Microsoft Entra ID → App registrations →
+   New ("move-desktop-ci"). Application (client) ID is `AZURE_CLIENT_ID`,
+   Directory (tenant) ID is `AZURE_TENANT_ID`; under Certificates & secrets
+   create a client secret and store its value as `AZURE_CLIENT_SECRET` (it
+   expires, two years at most: set a reminder).
+6. **Grant it the role** *Trusted Signing Certificate Profile Signer* on the
+   Trusted Signing account (Access control (IAM) → Add role assignment).
+7. **Add the six `AZURE_*` secrets** to the GitHub repo.
+8. **Push the next tag.** The windows job hands the account and profile to
+   electron-builder, which installs the `TrustedSigning` PowerShell module on
+   the runner, signs both installers (SHA-256, RFC 3161 timestamp), and the
+   verification step fails unless `Get-AuthenticodeSignature` says `Valid`.
+
+Result: the installer's UAC/SmartScreen dialog names the verified publisher and
+the updater is on. SmartScreen's "Windows protected your PC" interstitial is
+reputation-based and may still show for a brand-new certificate; it goes away
+as installs accumulate. Once the certificate subject is known, set
+`win.publisherName` in `electron-builder.yml` to that exact name so
+electron-updater also verifies each update's signature before installing it.
+
 ## Icon
 
 `build/icon.png` (macOS, padded squircle) and `build/icon-win.png` (Windows,
-full bleed) are generated from the Move "M" mark by `scripts/make-icon.mjs`;
+full bleed) are the Move "M" mark, black with its gold offset, on white. Both
+are generated from exact polygons in `scripts/make-icon.mjs`;
 electron-builder derives `.icns` / `.ico` from them. To regenerate:
 
 ```sh

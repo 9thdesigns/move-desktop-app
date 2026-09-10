@@ -8,12 +8,18 @@
 # in place — so releases/latest never points at a half-uploaded release and
 # electron-updater never sees a latest*.yml before its installer exists.
 #
-# Signing is optional and driven entirely by repository secrets:
-#   macOS   CSC_LINK (base64 Developer ID .p12), CSC_KEY_PASSWORD,
+# Signing is optional and driven entirely by repository secrets (README,
+# "Getting the builds trusted", walks through obtaining each of them):
+#   macOS   CSC_LINK (base64 Developer ID Application .p12), CSC_KEY_PASSWORD,
 #           APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
-#   Windows WIN_CSC_LINK (base64 Authenticode .pfx), WIN_CSC_KEY_PASSWORD
+#   Windows either Azure Trusted Signing: AZURE_TENANT_ID, AZURE_CLIENT_ID,
+#           AZURE_CLIENT_SECRET, AZURE_TRUSTED_SIGNING_ENDPOINT,
+#           AZURE_TRUSTED_SIGNING_ACCOUNT, AZURE_TRUSTED_SIGNING_PROFILE
+#           or a certificate file: WIN_CSC_LINK (base64 .pfx), WIN_CSC_KEY_PASSWORD
 # Without them the builds are unsigned (users click past Gatekeeper /
 # SmartScreen once); auto-update needs signed builds on both platforms.
+# When signing is configured, each job verifies the result and fails the
+# release rather than shipping an installer that is not actually trusted.
 
 name: Release
 
@@ -105,6 +111,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run dist:mac
 
+      - name: Verify signature and notarization
+        if: env.SIGN_MAC == 'true'
+        run: |
+          for app in dist/mac-arm64/Move.app dist/mac/Move.app; do
+            echo "== $app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+            xcrun stapler validate "$app"
+          done
+
       - name: Build (unsigned, ad-hoc signed by afterPack)
         if: env.SIGN_MAC != 'true'
         env:
@@ -141,32 +157,72 @@ jobs:
 
       - run: npm test
 
-      - name: Decide whether to sign
+      # Azure Trusted Signing (recommended: the key never leaves Microsoft's
+      # HSM, which is also why a plain .pfx is no longer obtainable for a new
+      # certificate), else a certificate file, else unsigned.
+      - name: Decide how to sign
         run: |
-          if [ -n "${{ secrets.WIN_CSC_LINK }}" ]; then
-            echo "SIGN_WIN=true" >> "$GITHUB_ENV"
+          if [ -n "${{ secrets.AZURE_CLIENT_SECRET }}" ] && [ -n "${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}" ]; then
+            echo "SIGN_WIN=azure" >> "$GITHUB_ENV"
+          elif [ -n "${{ secrets.WIN_CSC_LINK }}" ]; then
+            echo "SIGN_WIN=pfx" >> "$GITHUB_ENV"
           else
             echo "SIGN_WIN=false" >> "$GITHUB_ENV"
           fi
 
       # This job must never receive the Apple CSC_LINK: electron-builder would
-      # try to sign the .exe with the macOS certificate. Only WIN_* secrets are
-      # mapped here.
-      - name: Build x64 and arm64 installers (Authenticode signed)
-        if: env.SIGN_WIN == 'true'
+      # try to sign the .exe with the macOS certificate. Only WIN_* / AZURE_*
+      # secrets are mapped here.
+      - name: Build x64 and arm64 installers (Azure Trusted Signing)
+        if: env.SIGN_WIN == 'azure'
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          unset CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
+          # Passed on the command line rather than kept in electron-builder.yml:
+          # once azureSignOptions is present electron-builder insists on
+          # signing, which would break the unsigned path.
+          AZURE=(
+            "-c.win.azureSignOptions.endpoint=$AZURE_TRUSTED_SIGNING_ENDPOINT"
+            "-c.win.azureSignOptions.codeSigningAccountName=$AZURE_TRUSTED_SIGNING_ACCOUNT"
+            "-c.win.azureSignOptions.certificateProfileName=$AZURE_TRUSTED_SIGNING_PROFILE"
+          )
+          npm run dist:win:x64 -- "${AZURE[@]}"
+          npm run dist:win:arm64 -- "${AZURE[@]}"
+
+      - name: Build x64 and arm64 installers (Authenticode, certificate file)
+        if: env.SIGN_WIN == 'pfx'
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
+          unset CSC_LINK CSC_KEY_PASSWORD
           npm run dist:win:x64
           npm run dist:win:arm64
 
       - name: Build x64 and arm64 installers (unsigned)
-        if: env.SIGN_WIN != 'true'
+        if: env.SIGN_WIN == 'false'
         run: |
           unset CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
           npm run dist:win:x64
           npm run dist:win:arm64
+
+      - name: Verify the installers carry a valid Authenticode signature
+        if: env.SIGN_WIN != 'false'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem dist/Move-win-*.exe) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($f.Name): $($s.Status) $($s.SignerCertificate.Subject)"
+            if ($s.Status -ne 'Valid') { $failed = $true }
+          }
+          if ($failed) { exit 1 }
 
       - name: Upload Windows artifacts
         env:

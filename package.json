@@ -1,7 +1,7 @@
 {
   "name": "move-desktop",
   "productName": "Move",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Move for macOS and Windows: a native window around https://m0ve.app",
   "private": true,
   "license": "UNLICENSED",
