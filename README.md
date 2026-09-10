@@ -42,11 +42,24 @@ npm run pack                                # unpacked build in dist/ (config ch
 
 ## Release
 
-Tagging is shipping. Bump `version` in `package.json`, commit, then:
+A release is one version bump plus one button (or one tag). `version` in
+`package.json` is the source of truth; the workflow refuses to run if the tag
+and that version disagree.
+
+**From the GitHub website.** Edit `package.json` on `main`, raise `version`,
+commit. Then Actions -> Release -> "Run workflow" -> Run workflow. It creates
+the matching tag for you and builds from it. Leave the version box empty; fill
+it in only to re-run an existing tag.
+
+**From the command line.** Same bump, then:
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+Either way the release stays a draft until every installer is uploaded, so the
+website's download links keep serving the previous version rather than 404ing
+mid-build.
 
 `.github/workflows/release.yml` then:
 
