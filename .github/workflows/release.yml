@@ -168,13 +168,16 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
 
           security find-identity -v -p codesigning "$KEYCHAIN"
+          # Everything after the certificate type, and only that:
+          # electron-builder refuses a CSC_NAME still carrying the
+          # "Developer ID Application:" prefix and matches on the remainder.
           NAME="$(security find-identity -v -p codesigning "$KEYCHAIN" \
-            | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+            | sed -n 's/.*"Developer ID Application: \([^"]*\)".*/\1/p' | head -1)"
           if [ -z "$NAME" ]; then
             echo "::error::No Developer ID Application identity was imported. Check the CSC_LINK and CSC_KEY_PASSWORD secrets."
             exit 1
           fi
-          echo "Signing as: $NAME"
+          echo "Signing as: Developer ID Application: $NAME"
           echo "CSC_NAME=$NAME" >> "$GITHUB_ENV"
           echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
