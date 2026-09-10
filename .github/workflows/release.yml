@@ -133,11 +133,56 @@ jobs:
             echo "SIGN_MAC=false" >> "$GITHUB_ENV"
           fi
 
-      - name: Build (Developer ID signed + notarized)
+      # Hand electron-builder a keychain that already holds the certificate,
+      # rather than letting it build one. Given CSC_LINK it creates a throwaway
+      # keychain with a random password, then authorises the imported key with
+      # the *.p12* password instead of that keychain password, so
+      # `security set-key-partition-list` fails with "the user name or
+      # passphrase you entered is not correct" before anything is signed
+      # (electron-builder 26.15.3). With CSC_LINK absent it simply signs with
+      # the identity named by CSC_NAME out of CSC_KEYCHAIN.
+      - name: Import the Developer ID certificate
         if: env.SIGN_MAC == 'true'
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/move-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT="$RUNNER_TEMP/certificate.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Leave the runner's own keychains in the search list: Apple's
+          # intermediate certificates live there and the chain has to resolve
+          # while signing.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          printf '%s' "$CSC_LINK" | base64 --decode > "$CERT"
+          security import "$CERT" -k "$KEYCHAIN" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          rm -f "$CERT"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          NAME="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$NAME" ]; then
+            echo "::error::No Developer ID Application identity was imported. Check the CSC_LINK and CSC_KEY_PASSWORD secrets."
+            exit 1
+          fi
+          echo "Signing as: $NAME"
+          echo "CSC_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      # CSC_LINK is deliberately not mapped here: its presence is what sends
+      # electron-builder down the keychain path that fails above.
+      - name: Build (Developer ID signed + notarized)
+        if: env.SIGN_MAC == 'true'
+        env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
