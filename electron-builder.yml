@@ -62,6 +62,9 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: Move uses your microphone for huddles and voice channels.
     NSCameraUsageDescription: Move uses your camera for video in huddles.
+    # Without this string macOS refuses CoreLocation outright and the weather
+    # widget never gets coordinates.
+    NSLocationWhenInUseUsageDescription: Move uses your location to show the weather where you are.
     NSUserNotificationAlertStyle: alert
 
 dmg:

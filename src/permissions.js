@@ -8,7 +8,20 @@
 //   fullscreen                 – video / focus mode
 //   media                      – microphone & camera for huddles and voice channels
 //   clipboard-sanitized-write  – "Copy link" buttons (navigator.clipboard.writeText)
-const ALLOWED_PERMISSIONS = new Set(['notifications', 'fullscreen', 'media', 'clipboard-sanitized-write']);
+//   geolocation                – the dashboard weather widget
+//
+// Granting geolocation here is necessary but not sufficient: macOS also needs
+// the Info.plist usage string and the location entitlement (electron-builder.yml,
+// build/entitlements.mac.plist), and on Windows Chromium's network location
+// provider needs a Google API key that prebuilt Electron does not carry. The
+// widget falls back to a time-zone-derived city wherever the request fails.
+const ALLOWED_PERMISSIONS = new Set([
+  'notifications',
+  'fullscreen',
+  'media',
+  'clipboard-sanitized-write',
+  'geolocation',
+]);
 
 function install(session, { isAppUrl, desktopCapturer }) {
   const allowed = (permission, url) => ALLOWED_PERMISSIONS.has(permission) && isAppUrl(url);
