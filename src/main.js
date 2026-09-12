@@ -88,6 +88,12 @@ function titleBarOptions() {
   return {};
 }
 
+// Whether the windows this app opens have a native title bar to drag by. They
+// do not on macOS or Windows, which is why the page has to donate a draggable
+// strip; the preload reads this and installs one. Derived from the options
+// above rather than repeating the platform test, so the two cannot drift.
+const CHROMELESS = Object.keys(titleBarOptions()).length > 0;
+
 function windowOptions(bounds) {
   return {
     ...bounds,
@@ -342,6 +348,7 @@ function registerIpc() {
       platform: process.platform,
       arch: process.arch,
       titleBarHeight: config.TITLEBAR_HEIGHT,
+      chromeless: CHROMELESS,
     };
   });
 
