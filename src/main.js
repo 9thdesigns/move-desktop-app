@@ -31,6 +31,21 @@ const START_URL = `${APP_ORIGIN}${config.START_PATH}`;
 const OFFLINE_PAGE = path.join(__dirname, 'offline.html');
 const DEEP_LINK = { scheme: config.PROTOCOL_SCHEME };
 
+// Let the site's notification chimes play without a click first.
+//
+// Chromium gates audio on user activation, and a browser tab nearly always has
+// it — you clicked a link to get to the page. This window often does not: it
+// can sit untouched since launch, or be brought forward from the Dock or with
+// Cmd-Tab, and none of that is a gesture the page sees. A message or huddle
+// arriving in that state had its play() rejected, which is exactly the state
+// the user is in when the sound is the only thing that would tell them.
+//
+// `autoplayPolicy` in webPreferences is documented to default to this already,
+// but it has been reported not to take effect since Electron 5 — setting it
+// there changes nothing. The command line switch does apply, and it has to be
+// appended before `ready`.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 let mainWindow = null;
 let pendingDeepLink = null;
 // webContents → last site URL it showed, so the offline page knows where to retry.
