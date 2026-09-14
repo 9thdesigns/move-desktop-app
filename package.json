@@ -21,7 +21,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/navigation.js && node --check src/menu.js && node --check src/updater.js && node --check src/window-state.js && node --check src/permissions.js && node --check src/deep-links.js && node --check build/afterPack.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/navigation.js && node --check src/menu.js && node --check src/updater.js && node --check src/window-state.js && node --check src/permissions.js && node --check src/deep-links.js && node --check src/badge.js && node --check build/afterPack.js",
     "pack": "electron-builder --dir --publish never",
     "dist:mac": "electron-builder --mac --arm64 --x64 --publish never",
     "dist:win:x64": "electron-builder --win --x64 --publish never",

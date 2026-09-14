@@ -11,11 +11,12 @@
 //   6. grant only a short permission allowlist, only to the site
 //   7. keep itself updated (src/updater.js)
 //   8. provide a native menu bar (src/menu.js)
+//   9. show the site's unread count on the app icon (src/badge.js)
 // plus the deep link (move-desktop://) that brings the user back after a flow
 // that had to run in the system browser.
 
 const path = require('node:path');
-const { app, BrowserWindow, Menu, session, shell, ipcMain, screen, desktopCapturer, net, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, session, shell, ipcMain, screen, desktopCapturer, net, clipboard, nativeImage } = require('electron');
 
 const config = require('./config');
 const { createPolicy, isOpenableExternally } = require('./navigation');
@@ -24,6 +25,7 @@ const permissions = require('./permissions');
 const deepLinks = require('./deep-links');
 const updater = require('./updater');
 const menu = require('./menu');
+const badge = require('./badge');
 
 const APP_ORIGIN = config.resolveAppUrl({ isPackaged: app.isPackaged });
 const policy = createPolicy({ appOrigin: APP_ORIGIN });
@@ -125,6 +127,13 @@ function windowOptions(bounds) {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: true,
+      // Chromium starves timers in a window it considers background —
+      // minimised, or fully covered by another app — and clamps intervals to
+      // about once a minute. That is precisely when the site's unread poll
+      // matters most: the window is away but the Dock badge the user is looking
+      // at comes from it. The cost is a page that keeps running while hidden,
+      // which is what this app is for.
+      backgroundThrottling: false,
     },
   };
 }
@@ -370,6 +379,21 @@ function registerIpc() {
   ipcMain.handle('move:open-external', (event, url) => {
     if (!fromAppPage(event) || !isOpenableExternally(url)) return false;
     shell.openExternal(url);
+    return true;
+  });
+
+  // The unread count, pushed by the site whenever it changes. On Windows the
+  // page's preload has already drawn the taskbar overlay; on macOS the number
+  // is all the Dock needs. Both go through src/badge.js.
+  ipcMain.handle('move:set-badge-count', (event, payload) => {
+    if (!fromAppPage(event)) return false;
+    badge.apply({
+      app,
+      win: BrowserWindow.fromWebContents(event.sender),
+      nativeImage,
+      count: payload && payload.count,
+      overlayDataUrl: payload && payload.overlay,
+    });
     return true;
   });
 
