@@ -11,6 +11,7 @@
 //   window.moveDesktop.openExternal(url)    – open an http(s) URL in the system browser
 //   window.moveDesktop.setTitleBarOverlay({ color, symbolColor })
 //                                           – recolour the Windows caption buttons
+//   window.moveDesktop.setBadgeCount(n)     – unread count on the Dock / taskbar icon
 //
 // It also installs the window's drag strip — see installDragStrip below.
 
@@ -22,6 +23,54 @@ function isAppHost(hostname) {
   return hostname === info.appHost || hostname.endsWith(`.${info.appHost}`);
 }
 
+// ---------------------------------------------------------------------------
+// The Windows taskbar badge
+// ---------------------------------------------------------------------------
+//
+// macOS draws its own numeric Dock badge from a count; Windows has no such
+// thing, only a small icon overlaid on the taskbar button — so on Windows the
+// number has to be painted. This is where it happens, because a sandboxed
+// preload can reach a canvas and the main process cannot. The main process gets
+// a PNG data URL back and hands it to nativeImage (src/badge.js).
+//
+// Windows asks for 16x16; drawn at 32 so it stays sharp on a scaled display.
+// The cap lives here rather than in src/badge.js — a sandboxed preload can only
+// require `electron` and a handful of node builtins, never a file of ours — and
+// it applies to the drawing alone: the Dock takes the real number.
+const BADGE_MAX = 99;
+const BADGE_SIZE = 32;
+
+function badgeLabel(count) {
+  return count > BADGE_MAX ? `${BADGE_MAX}+` : String(count);
+}
+
+function drawBadgeOverlay(count) {
+  const canvas = document.createElement('canvas');
+  canvas.width = BADGE_SIZE;
+  canvas.height = BADGE_SIZE;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const center = BADGE_SIZE / 2;
+  ctx.fillStyle = '#dc2626';
+  ctx.beginPath();
+  ctx.arc(center, center, center, 0, Math.PI * 2);
+  ctx.fill();
+
+  const label = badgeLabel(count);
+  // Three glyphs ("99+") need the room two do not.
+  const fontSize = label.length >= 3 ? 15 : label.length === 2 ? 19 : 22;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${fontSize}px "Segoe UI", system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // A hair below centre: digits sit visually high in their em box.
+  ctx.fillText(label, center, center + 1);
+
+  return canvas.toDataURL('image/png');
+}
+
 if (info && isAppHost(window.location.hostname)) {
   contextBridge.exposeInMainWorld('moveDesktop', {
     isDesktop: true,
@@ -31,6 +80,20 @@ if (info && isAppHost(window.location.hostname)) {
     titleBarHeight: info.titleBarHeight,
     openExternal: (url) => ipcRenderer.invoke('move:open-external', String(url)),
     setTitleBarOverlay: (options) => ipcRenderer.invoke('move:set-titlebar-overlay', options || {}),
+    setBadgeCount: (count) => {
+      const value = Number(count);
+      const badge = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+      let overlay = null;
+      if (info.platform === 'win32' && badge > 0) {
+        try {
+          overlay = drawBadgeOverlay(badge);
+        } catch (_) {
+          // No canvas, no overlay — the main process clears rather than leaving
+          // a stale number on the taskbar.
+        }
+      }
+      return ipcRenderer.invoke('move:set-badge-count', { count: badge, overlay });
+    },
   });
 }
 

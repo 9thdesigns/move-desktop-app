@@ -26,7 +26,8 @@ deploy.
 | Auto-update via `electron-updater`: quiet background checks, "Restart Now / Later" when a build has downloaded, Help → Check for Updates… | `src/updater.js` |
 | Native menu bar with Back / Forward / Home and Help links | `src/menu.js` |
 | `move-desktop://open?path=/…` deep link that brings the user back after a flow that had to run in the system browser (Google OAuth) | `src/deep-links.js` |
-| `window.moveDesktop` bridge for the site (`openExternal`, `setTitleBarOverlay`, version) | `src/preload.js` |
+| Unread count on the app icon: a numeric Dock badge on macOS, a drawn taskbar overlay on Windows. The site pushes the number through the bridge | `src/badge.js` |
+| `window.moveDesktop` bridge for the site (`openExternal`, `setTitleBarOverlay`, `setBadgeCount`, version) | `src/preload.js` |
 
 ## Develop
 
