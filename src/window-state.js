@@ -10,6 +10,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_SIZE = { width: 1280, height: 820 };
+// The smallest window the site's desktop layout still works in (the top bar's
+// island plus the traffic-light / caption-button insets). BrowserWindow's
+// minWidth / minHeight come from here too.
+const MIN_SIZE = { width: 720, height: 480 };
 const MIN_VISIBLE = 120;
 
 function stateFile(app) {
@@ -39,15 +43,32 @@ function overlaps(a, b) {
   return w >= MIN_VISIBLE && h >= MIN_VISIBLE;
 }
 
-function onSomeDisplay(bounds, screen) {
-  return screen.getAllDisplays().some((display) => overlaps(display.workArea, bounds));
+function displayFor(bounds, screen) {
+  return screen.getAllDisplays().find((display) => overlaps(display.workArea, bounds)) || null;
+}
+
+// Saved bounds that still overlap a display can be bigger than it (the window
+// was last on a larger monitor) or have the title bar above its top edge.
+// Shrink to the work area, never below the minimum size, and bring the top
+// edge back inside so the title bar and its controls are reachable. A window
+// deliberately parked half off the side of the screen stays where it was.
+function fitToWorkArea(bounds, workArea) {
+  const width = Math.max(Math.min(bounds.width, workArea.width), Math.min(MIN_SIZE.width, workArea.width));
+  const height = Math.max(Math.min(bounds.height, workArea.height), Math.min(MIN_SIZE.height, workArea.height));
+  const shrunkX = width < bounds.width;
+  const x = shrunkX ? Math.min(Math.max(bounds.x, workArea.x), workArea.x + workArea.width - width) : bounds.x;
+  const shrunkY = height < bounds.height;
+  const top = Math.max(bounds.y, workArea.y);
+  const y = shrunkY ? Math.min(top, workArea.y + workArea.height - height) : top;
+  return { ...bounds, width, height, x: Math.round(x), y: Math.round(y) };
 }
 
 // Bounds to open with: the saved ones when they are still visible, otherwise a
 // sensible default centred on the primary display.
 function restore({ app, screen }) {
   const saved = read(stateFile(app));
-  if (saved && onSomeDisplay(saved, screen)) return saved;
+  const display = saved && displayFor(saved, screen);
+  if (display) return fitToWorkArea(saved, display.workArea);
 
   const { workArea } = screen.getPrimaryDisplay();
   const width = Math.min(DEFAULT_SIZE.width, workArea.width);
@@ -95,4 +116,4 @@ function track(win, { app }) {
   });
 }
 
-module.exports = { restore, track, DEFAULT_SIZE };
+module.exports = { restore, track, fitToWorkArea, DEFAULT_SIZE, MIN_SIZE };

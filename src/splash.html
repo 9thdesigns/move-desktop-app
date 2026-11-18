@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <meta name="color-scheme" content="light dark">
+  <title>Move</title>
+  <!--
+    The launch splash. Drawn in a view laid over the main window the instant
+    the window exists, while the site loads underneath in parallel; it fades
+    out the moment the site's document is ready (src/splash.js). Everything is
+    inline — no network, no fonts to fetch — so it paints on the first frame.
+
+    The look follows m0ve.app's homepage: the Notion-calm paper and ink
+    palette, the faint month grid behind the hero, the Move mark with its
+    offset gold echo, tight semibold type, and the homepage's easing
+    (cubic-bezier(0.16, 1, 0.3, 1)). CSS animation only; with reduced motion
+    everything simply fades.
+
+    States (body[data-state]), driven by src/splash-state.js:
+      loading  — the mark, the wordmark and an indeterminate hairline
+      slow     — after ~15 s: "Still loading…" and a Retry button
+      offline  — the site could not be reached: Retry, and an automatic retry
+                 as soon as the connection is back
+      ready    — fade out
+  -->
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #fbfbfa;
+      --ink: #1f1f1f;
+      --ink-2: #37352f;
+      --mute: #787774;
+      --mute-2: #9b9a97;
+      --grid: rgba(55, 53, 47, 0.07);
+      --chip: rgba(55, 53, 47, 0.055);
+      --chip-line: rgba(55, 53, 47, 0.08);
+      --chip-accent: rgba(214, 183, 47, 0.16);
+      --chip-accent-line: rgba(214, 183, 47, 0.32);
+      --track: rgba(55, 53, 47, 0.1);
+      --bar: #37352f;
+      --gold: #eada96;
+      --mark: #000000;
+      --btn: #171717;
+      --btn-ink: #fbfbfa;
+      --btn-press: #2a2a2a;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-io: cubic-bezier(0.65, 0, 0.35, 1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #191919;
+        --ink: rgba(255, 255, 255, 0.88);
+        --ink-2: rgba(255, 255, 255, 0.72);
+        --mute: #9b9a97;
+        --mute-2: #75746f;
+        --grid: rgba(255, 255, 255, 0.055);
+        --chip: rgba(255, 255, 255, 0.05);
+        --chip-line: rgba(255, 255, 255, 0.07);
+        --chip-accent: rgba(214, 183, 47, 0.14);
+        --chip-accent-line: rgba(214, 183, 47, 0.28);
+        --track: rgba(255, 255, 255, 0.1);
+        --bar: rgba(255, 255, 255, 0.78);
+        --gold: #8a7a3a;
+        --mark: rgba(255, 255, 255, 0.92);
+        --btn: rgba(255, 255, 255, 0.92);
+        --btn-ink: #191919;
+        --btn-press: rgba(255, 255, 255, 0.78);
+      }
+    }
+
+    html, body { margin: 0; height: 100%; }
+    /* The view itself is transparent so the fade-out reveals the app; the
+       paper lives on .stage. */
+    html { background: transparent; -webkit-app-region: drag; user-select: none; -webkit-user-select: none; cursor: default; }
+    body {
+      font-family: "FixelText", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+
+    .stage {
+      position: fixed;
+      inset: 0;
+      background: var(--paper);
+      display: grid;
+      place-items: center;
+      transition: opacity 260ms var(--ease), transform 260ms var(--ease);
+    }
+    body[data-state="ready"] .stage { opacity: 0; transform: scale(1.012); }
+
+    /* ── The month grid behind the hero ─────────────────────────────── */
+    .grid {
+      position: absolute;
+      inset: -1px;
+      background-image:
+        linear-gradient(to bottom, var(--grid) 1px, transparent 1px),
+        linear-gradient(to right, var(--grid) 1px, transparent 1px);
+      background-size: calc(100% / 7) 132px;
+      background-position: 0 38px;
+      -webkit-mask-image: radial-gradient(ellipse 70% 62% at 50% 46%, #000 0%, rgba(0, 0, 0, 0.55) 45%, transparent 82%);
+      mask-image: radial-gradient(ellipse 70% 62% at 50% 46%, #000 0%, rgba(0, 0, 0, 0.55) 45%, transparent 82%);
+      opacity: 0;
+      animation: fade-in 900ms var(--ease) 40ms forwards;
+    }
+    /* A few events dropping into the week, like a calendar filling up. */
+    .chips { position: absolute; inset: 38px 0 0; pointer-events: none; }
+    .chip {
+      position: absolute;
+      height: 22px;
+      border-radius: 6px;
+      background: var(--chip);
+      box-shadow: inset 0 0 0 1px var(--chip-line);
+      opacity: 0;
+      animation: chip-in 900ms var(--ease) forwards, float 6s ease-in-out 1.2s infinite;
+    }
+    .chip--accent { background: var(--chip-accent); box-shadow: inset 0 0 0 1px var(--chip-accent-line); }
+    .chip:nth-child(1) { left: calc(100% / 7 * 1 + 10px); top: 46px; width: calc(100% / 7 - 34px); animation-delay: 420ms, 1.3s; }
+    .chip:nth-child(2) { left: calc(100% / 7 * 4 + 10px); top: 78px; width: calc(100% / 7 - 22px); animation-delay: 540ms, 2.1s; }
+    .chip:nth-child(3) { left: calc(100% / 7 * 2 + 10px); top: 340px; width: calc(100% / 7 - 46px); animation-delay: 660ms, 1.7s; }
+    .chip:nth-child(4) { left: calc(100% / 7 * 5 + 10px); top: 310px; width: calc(100% / 7 - 30px); animation-delay: 780ms, 2.5s; }
+    .chip:nth-child(5) { left: calc(100% / 7 * 0 + 10px); top: 210px; width: calc(100% / 7 - 40px); animation-delay: 900ms, 1.9s; }
+
+    /* ── Centre column ───────────────────────────────────────────────── */
+    .center {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 0 24px;
+      max-width: 420px;
+    }
+    .mark { width: 72px; height: 72px; display: block; overflow: visible; }
+    .mark .ink { fill: var(--mark); opacity: 0; animation: rise 760ms var(--ease) 80ms forwards; }
+    .mark .echo {
+      fill: var(--gold);
+      opacity: 0;
+      transform: translate(0, 0);
+      animation: echo 900ms var(--ease) 300ms forwards;
+    }
+    .word {
+      margin: 18px 0 0;
+      font-size: 30px;
+      line-height: 1.04;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      color: var(--ink);
+      opacity: 0;
+      animation: rise 760ms var(--ease) 380ms forwards;
+    }
+
+    .status {
+      margin-top: 22px;
+      min-height: 140px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      opacity: 0;
+      animation: fade-in 600ms var(--ease) 560ms forwards;
+    }
+    .progress {
+      width: 148px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--track);
+      overflow: hidden;
+      transition: opacity 240ms var(--ease);
+    }
+    .progress span {
+      display: block;
+      width: 40%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--bar);
+      animation: sweep 1.5s var(--ease-io) infinite;
+    }
+    body[data-state="slow"] .progress span { animation-duration: 2.4s; }
+    body[data-state="offline"] .progress { opacity: 0; height: 0; }
+
+    .line { margin: 14px 0 0; font-size: 13px; line-height: 1.45; color: var(--mute); letter-spacing: -0.003em; }
+    .line strong { display: block; font-weight: 600; font-size: 15px; color: var(--ink-2); letter-spacing: -0.01em; margin-bottom: 2px; }
+    body[data-state="offline"] .line { margin-top: 0; }
+    .swap { animation: swap 420ms var(--ease) both; }
+
+    .actions { margin-top: 16px; display: none; gap: 8px; }
+    body[data-state="slow"] .actions,
+    body[data-state="offline"] .actions { display: flex; animation: rise 520ms var(--ease) both; }
+    .btn {
+      -webkit-app-region: no-drag;
+      appearance: none;
+      border: 0;
+      height: 32px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--btn);
+      color: var(--btn-ink);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+      transition: background-color 120ms var(--ease), transform 120ms var(--ease);
+    }
+    .btn:hover { background: var(--btn-press); }
+    .btn:active { transform: scale(0.97); }
+    .btn:focus-visible { outline: 2px solid var(--mute); outline-offset: 3px; }
+
+    .wait { display: none; margin-top: 12px; font-size: 12px; color: var(--mute-2); align-items: center; gap: 7px; }
+    body[data-state="offline"] .wait { display: inline-flex; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #d6b72f; animation: pulse 1.6s ease-in-out infinite; }
+    .reason { margin-top: 6px; font-size: 11px; color: var(--mute-2); max-width: 320px; overflow-wrap: anywhere; }
+    .reason:empty { display: none; }
+
+    @keyframes fade-in { to { opacity: 1; } }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes echo { from { opacity: 0; transform: translate(0, 0); } to { opacity: 1; transform: translate(28px, -8px); } }
+    @keyframes chip-in { from { opacity: 0; transform: translateY(-6px) scale(0.96); } to { opacity: 1; transform: none; } }
+    @keyframes float { 0%, 100% { translate: 0 0; } 50% { translate: 0 -3px; } }
+    @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+    @keyframes swap { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+    /* Reduced motion: nothing moves. Things still appear, by fading, and the
+       progress hairline becomes a gentle pulse instead of a sweep. */
+    @media (prefers-reduced-motion: reduce) {
+      .grid, .chip, .mark .ink, .word, .status, .actions, .swap {
+        animation: fade-in 160ms linear forwards !important;
+        transform: none !important;
+      }
+      body[data-state="slow"] .actions, body[data-state="offline"] .actions { animation: none !important; opacity: 1; }
+      .swap { opacity: 1; animation: none !important; }
+      .mark .echo { animation: fade-in 160ms linear forwards; transform: translate(28px, -8px); }
+      .progress span { width: 100%; animation: pulse 2.4s ease-in-out infinite; transform: none; }
+      .dot { animation: none; opacity: 0.8; }
+      .stage { transition: opacity 120ms linear; }
+      body[data-state="ready"] .stage { transform: none; }
+    }
+  </style>
+</head>
+<body data-state="loading">
+  <main class="stage">
+    <div class="grid" aria-hidden="true"></div>
+    <div class="chips" aria-hidden="true">
+      <i class="chip"></i><i class="chip chip--accent"></i><i class="chip"></i><i class="chip"></i><i class="chip chip--accent"></i>
+    </div>
+
+    <div class="center">
+      <!-- The Move mark (scripts/make-icon.mjs geometry): the M, and its pale
+           gold echo offset up and to the right. -->
+      <svg class="mark" viewBox="96 96 320 320" role="img" aria-label="Move">
+        <g class="echo">
+          <polygon points="110,116.5 186.5,116.5 245,246 291.5,144 291.5,285 239.5,404.5"/>
+          <polygon points="108,146 177,299.33 177,404.5 108,404.5"/>
+          <polygon points="303,116.5 376,116.5 376,404.5 303,404.5"/>
+        </g>
+        <g class="ink">
+          <polygon points="110,116.5 186.5,116.5 245,246 291.5,144 291.5,285 239.5,404.5"/>
+          <polygon points="108,146 177,299.33 177,404.5 108,404.5"/>
+          <polygon points="303,116.5 376,116.5 376,404.5 303,404.5"/>
+        </g>
+      </svg>
+      <h1 class="word">Move</h1>
+
+      <div class="status">
+        <div class="progress" aria-hidden="true"><span></span></div>
+        <p class="line" id="line" role="status" aria-live="polite">Opening your workspace…</p>
+        <div class="actions">
+          <button class="btn" id="retry" type="button">Retry</button>
+        </div>
+        <div class="wait"><span class="dot" aria-hidden="true"></span><span>Waiting for a connection…</span></div>
+        <div class="reason" id="reason"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      var bridge = window.moveSplash || null;
+      var body = document.body;
+      var line = document.getElementById('line');
+      var reasonEl = document.getElementById('reason');
+
+      var COPY = {
+        loading: function () { return { title: null, text: 'Opening your workspace…' }; },
+        slow: function () { return { title: 'Still loading…', text: 'This is taking longer than usual.' }; },
+        offline: function () { return { title: 'You’re offline', text: 'Move will reconnect on its own as soon as your connection is back.' }; },
+        ready: function () { return null; },
+      };
+
+      function setLine(copy) {
+        while (line.firstChild) line.removeChild(line.firstChild);
+        if (copy.title) {
+          var strong = document.createElement('strong');
+          strong.textContent = copy.title;
+          line.appendChild(strong);
+        }
+        line.appendChild(document.createTextNode(copy.text));
+        line.classList.remove('swap');
+        void line.offsetWidth; // restart the swap animation
+        line.classList.add('swap');
+      }
+
+      var current = 'loading';
+      function apply(snapshot) {
+        if (!snapshot || !COPY.hasOwnProperty(snapshot.state)) return;
+        var state = snapshot.state;
+        var previous = current;
+        current = state;
+        body.setAttribute('data-state', state);
+        reasonEl.textContent = state === 'offline' && snapshot.reason ? snapshot.reason : '';
+        var copy = COPY[state]();
+        if (copy && (state !== previous || state === 'offline')) setLine(copy);
+        if (state === 'loading' && previous !== 'loading') setLine({ title: null, text: snapshot.attempt ? 'Trying again…' : 'Opening your workspace…' });
+      }
+
+      document.getElementById('retry').addEventListener('click', function () {
+        if (bridge) bridge.retry();
+        else apply({ state: 'loading', attempt: 1 });
+      });
+
+      // Back online: try straight away instead of waiting for the next probe.
+      window.addEventListener('online', function () {
+        if (current === 'offline' && bridge) bridge.online();
+      });
+
+      if (bridge) {
+        bridge.onState(apply);
+      } else {
+        // Opened on its own (a design preview): ?state=slow|offline&reason=…
+        var params = new URLSearchParams(window.location.search);
+        var preview = params.get('state');
+        if (preview && COPY.hasOwnProperty(preview)) apply({ state: preview, reason: params.get('reason') });
+      }
+    })();
+  </script>
+</body>
+</html>

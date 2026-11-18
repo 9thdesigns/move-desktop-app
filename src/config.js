@@ -21,6 +21,20 @@ const PROTOCOL_SCHEME = 'move-desktop';
 // (macOS) / caption buttons (Windows). Keep in sync with the Rails side.
 const TITLEBAR_HEIGHT = 38;
 
+// Window background and Windows caption-button colours before the page paints,
+// per system theme: the same paper and ink the splash and the site use
+// (move/tokens.css in m0ve-web), so a launch or a resize never flashes white
+// on a dark desktop. The site recolours the caption buttons to its own
+// background once it loads (desktop_titlebar_controller → setTitleBarOverlay).
+const THEME = Object.freeze({
+  light: Object.freeze({ background: '#fbfbfa', symbol: '#37352f' }),
+  dark: Object.freeze({ background: '#191919', symbol: '#e9e9e7' }),
+});
+
+function themeColors(dark) {
+  return dark ? THEME.dark : THEME.light;
+}
+
 const HELP_URL = 'https://docs.m0ve.app';
 const RELEASES_URL = 'https://github.com/9thdesigns/move-desktop-app/releases';
 
@@ -48,6 +62,8 @@ module.exports = {
   UA_MARKER_PREFIX,
   PROTOCOL_SCHEME,
   TITLEBAR_HEIGHT,
+  THEME,
+  themeColors,
   HELP_URL,
   RELEASES_URL,
   resolveAppUrl,

@@ -58,15 +58,49 @@ test('everything else opens in the system browser', () => {
 });
 
 test('non-http schemes are dropped, never handed to the OS', () => {
-  assert.equal(action('mailto:hi@example.com'), 'deny');
   assert.equal(action('javascript:alert(1)'), 'deny');
   assert.equal(action('file:///etc/passwd'), 'deny');
   assert.equal(action('ms-msdt:/id'), 'deny');
   assert.equal(action('about:blank'), 'deny');
   assert.equal(action('not a url'), 'deny');
   assert.equal(isOpenableExternally('https://example.com'), true);
-  assert.equal(isOpenableExternally('mailto:hi@example.com'), false);
   assert.equal(isOpenableExternally('javascript:1'), false);
+});
+
+test('mailto: links go to the mail client', () => {
+  assert.equal(action('mailto:hi@example.com'), 'external');
+  assert.equal(action('mailto:hi@example.com?subject=Hello%20there'), 'external');
+  assert.equal(action('mailto:'), 'deny');
+});
+
+test('the external allowlist is http, https and mailto only', () => {
+  for (const ok of ['https://example.com/', 'http://example.com/a?b=c', 'mailto:hi@example.com', 'mailto:a@b.c?subject=x']) {
+    assert.equal(isOpenableExternally(ok), true, ok);
+  }
+  for (const bad of [
+    'file:///etc/passwd',
+    'javascript:alert(1)',
+    'data:text/html,hi',
+    'ms-msdt:/id PCWDiagnostic',
+    'smb://evil/share',
+    'vbscript:x',
+    'move-desktop://open?path=/',
+    'tel:+15551234567',
+    'mailto:',
+    'https://',
+    'https://user:pass@example.com/',
+    'https://example.com/\nx',
+    ' https://example.com/',
+    'https://exa mple.com/',
+    `https://example.com/${'a'.repeat(5000)}`,
+    '',
+    null,
+    undefined,
+    42,
+    {},
+  ]) {
+    assert.equal(isOpenableExternally(bad), false, String(bad));
+  }
 });
 
 test('a development origin makes localhost the app host', () => {

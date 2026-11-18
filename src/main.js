@@ -12,11 +12,18 @@
 //   7. keep itself updated (src/updater.js)
 //   8. provide a native menu bar (src/menu.js)
 //   9. show the site's unread count on the app icon (src/badge.js)
+//  10. a launch splash over the window while the site loads (src/splash.js)
+//  11. its own notices as toasts in the page (src/toasts.js)
 // plus the deep link (move-desktop://) that brings the user back after a flow
 // that had to run in the system browser.
+//
+// Startup order matters for how fast the window appears: the window and its
+// splash are created first thing in `ready`, the site starts loading at the
+// same moment, and nothing else (menu, updater) stands in front of either.
+// The updater does not even load electron-updater until its first check.
 
 const path = require('node:path');
-const { app, BrowserWindow, Menu, session, shell, ipcMain, screen, desktopCapturer, net, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, session, shell, ipcMain, screen, desktopCapturer, net, clipboard, nativeImage, nativeTheme } = require('electron');
 
 const config = require('./config');
 const { createPolicy, isOpenableExternally } = require('./navigation');
@@ -26,6 +33,9 @@ const deepLinks = require('./deep-links');
 const updater = require('./updater');
 const menu = require('./menu');
 const badge = require('./badge');
+const splash = require('./splash');
+const toasts = require('./toasts');
+const { SEARCH_PATH } = require('./shortcuts');
 
 const APP_ORIGIN = config.resolveAppUrl({ isPackaged: app.isPackaged });
 const policy = createPolicy({ appOrigin: APP_ORIGIN });
@@ -54,6 +64,10 @@ let pendingDeepLink = null;
 const lastAppUrl = new WeakMap();
 // BrowserWindow → reconnect timer while its offline page is showing.
 const reconnectTimers = new WeakMap();
+// BrowserWindow → its launch splash (src/splash.js), while one exists.
+const splashes = new WeakMap();
+// Windows that just came back from the offline page and owe a "Back online".
+const reconnected = new WeakSet();
 
 // ---------------------------------------------------------------------------
 // Single instance + custom URL scheme (must be set up before `ready`)
@@ -90,16 +104,22 @@ if (!app.requestSingleInstanceLock()) {
 // Windows
 // ---------------------------------------------------------------------------
 
+const isDark = () => nativeTheme.shouldUseDarkColors;
+
 // Chromeless, but not frameless: the OS keeps resize edges and its own window
-// controls, and the site renders a draggable strip under them.
-function titleBarOptions() {
+// controls, and the site renders a draggable strip under them. On macOS the
+// traffic lights sit centred in that 38px strip; on Windows the caption
+// buttons are a Window Controls Overlay exactly as tall as it, so nothing the
+// page draws below the strip is ever under a native control.
+function titleBarOptions(dark = false) {
   if (process.platform === 'darwin') {
     return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 13 } };
   }
   if (process.platform === 'win32') {
+    const colors = config.themeColors(dark);
     return {
       titleBarStyle: 'hidden',
-      titleBarOverlay: { color: '#f2f2f2', symbolColor: '#171717', height: config.TITLEBAR_HEIGHT },
+      titleBarOverlay: { color: colors.background, symbolColor: colors.symbol, height: config.TITLEBAR_HEIGHT },
     };
   }
   return {};
@@ -112,15 +132,20 @@ function titleBarOptions() {
 const CHROMELESS = Object.keys(titleBarOptions()).length > 0;
 
 function windowOptions(bounds) {
+  const dark = isDark();
   return {
     ...bounds,
-    minWidth: 720,
-    minHeight: 480,
+    minWidth: windowState.MIN_SIZE.width,
+    minHeight: windowState.MIN_SIZE.height,
     show: false,
     title: config.APP_NAME,
-    backgroundColor: '#f2f2f2',
+    // The system theme's paper, so the first frame and any resize gap match
+    // the splash and the site instead of flashing white on a dark desktop.
+    backgroundColor: config.themeColors(dark).background,
+    // macOS: the green button and Ctrl+Cmd+F enter a native full-screen Space.
+    fullscreenable: true,
     icon: process.platform === 'linux' ? path.join(__dirname, '..', 'build', 'icon.png') : undefined,
-    ...titleBarOptions(),
+    ...titleBarOptions(dark),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -138,38 +163,106 @@ function windowOptions(bounds) {
   };
 }
 
-function createWindow({ url, restoreState }) {
+// `withSplash`: lay the launch splash over the window and show it as soon as
+// the splash paints, while the site loads underneath. Used for the main
+// window; extra windows open on a warm session and skip it.
+function createWindow({ url, restoreState, withSplash = false }) {
   const state = restoreState ? windowState.restore({ app, screen }) : { ...windowState.DEFAULT_SIZE };
   const win = new BrowserWindow(windowOptions(state));
   if (state.isMaximized) win.maximize();
   if (restoreState) windowState.track(win, { app });
   attachWindow(win);
+  if (withSplash) {
+    splashes.set(
+      win,
+      splash.attach(win, {
+        reload: () => {
+          if (!win.isDestroyed()) win.loadURL(lastAppUrl.get(win.webContents) || url);
+        },
+        probe: siteReachable,
+        onPainted: () => showWindow(win),
+      }),
+    );
+    // Even if the splash itself somehow never paints.
+    setTimeout(() => showWindow(win), 600);
+  }
   win.loadURL(url);
   return win;
 }
 
+function showWindow(win) {
+  if (!win.isDestroyed() && !win.isVisible()) win.show();
+}
+
+function splashActive(win) {
+  const overlay = splashes.get(win);
+  return Boolean(overlay && overlay.isActive());
+}
+
 function attachWindow(win) {
-  const show = () => {
-    if (!win.isDestroyed() && !win.isVisible()) win.show();
-  };
-  win.once('ready-to-show', show);
+  win.once('ready-to-show', () => showWindow(win));
   // Never leave the user staring at nothing on a slow network.
-  setTimeout(show, 2500);
+  setTimeout(() => showWindow(win), 2500);
 
   const contents = win.webContents;
+
+  // Whether the main frame has failed since its last load began. Chromium can
+  // report the error page it then shows as a finished document, which must
+  // not count as "the app is ready" and dismiss the splash.
+  let failedSinceStart = false;
+  contents.on('did-start-loading', () => {
+    failedSinceStart = false;
+  });
 
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
     // -3 is ERR_ABORTED: a navigation we cancelled or the user superseded.
     if (!isMainFrame || errorCode === -3) return;
     if (typeof validatedUrl === 'string' && validatedUrl.startsWith('file:')) return;
+    failedSinceStart = true;
+    if (policy.isAppUrl(validatedUrl)) lastAppUrl.set(contents, validatedUrl);
+    // First launch: the splash shows its own offline state and keeps retrying.
+    if (splashActive(win)) {
+      splashes.get(win).failed(`${errorDescription} (${errorCode})`);
+      return;
+    }
     showOffline(win, validatedUrl, `${errorDescription} (${errorCode})`);
   });
+
+  // The splash goes the moment the site's document is ready — DOMContentLoaded,
+  // not the last image — and a page that came back from the offline screen
+  // says so.
+  const onDocumentReady = () => {
+    const url = contents.getURL();
+    if (failedSinceStart || !url || url.startsWith('file:') || policy.classify(url).action !== 'app') return;
+    if (splashActive(win)) splashes.get(win).ready();
+    if (reconnected.has(win) && policy.isAppUrl(url)) {
+      reconnected.delete(win);
+      toasts.show(win, { key: 'connectivity', variant: 'success', title: 'Back online', detail: 'Move reconnected.' });
+    }
+  };
+  contents.on('dom-ready', onDocumentReady);
+  contents.on('did-finish-load', onDocumentReady);
 
   const remember = (_event, url) => {
     if (policy.isAppUrl(url)) lastAppUrl.set(contents, url);
   };
   contents.on('did-navigate', remember);
   contents.on('did-navigate-in-page', remember);
+
+  // Full screen, for the page: on macOS the traffic lights disappear with it,
+  // so the inset the site keeps for them can collapse (src/preload.js).
+  const sendFullscreen = () => {
+    if (!contents.isDestroyed()) contents.send('move:fullscreen', win.isFullScreen());
+  };
+  win.on('enter-full-screen', sendFullscreen);
+  win.on('leave-full-screen', sendFullscreen);
+
+  // Coming back to the window (Cmd-Tab, the Dock, a notification) should put
+  // the keyboard straight into the page, not leave it with nothing focused.
+  win.on('focus', () => {
+    if (splashActive(win) || contents.isDestroyed() || contents.isDevToolsFocused()) return;
+    contents.focus();
+  });
 
   contents.on('context-menu', (_event, params) => showContextMenu(win, params));
 
@@ -192,19 +285,49 @@ function currentWindow() {
   return BrowserWindow.getAllWindows()[0] || null;
 }
 
-function focusMainWindow() {
-  const win = currentWindow();
-  if (!win) return;
+function focusWindow(win) {
+  if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+}
+
+function focusMainWindow() {
+  focusWindow(currentWindow());
+}
+
+// The one way anything here hands a URL to the OS: http, https and mailto
+// only (src/navigation.js), and a failure is a toast rather than silence.
+function openExternal(url) {
+  if (!isOpenableExternally(url)) return false;
+  shell.openExternal(url).catch((error) => {
+    console.warn('[shell] openExternal failed', error && error.message);
+    toasts.show(currentWindow(), {
+      variant: 'error',
+      title: 'Couldn’t open the link',
+      detail: 'Your system has no app set up to open it.',
+    });
+  });
+  return true;
+}
+
+// Menu → Search: the site's own Cmd/Ctrl+K when the page is ours (see
+// src/shortcuts.js), the search page otherwise.
+function runSearch() {
+  const win = currentWindow();
+  if (win && policy.isAppUrl(win.webContents.getURL())) {
+    win.webContents.send('move:command', { name: 'search', fallbackPath: SEARCH_PATH });
+    focusWindow(win);
+    return;
+  }
+  openInApp(SEARCH_PATH);
 }
 
 function openInApp(pathname, { newWindow = false } = {}) {
   const url = `${APP_ORIGIN}${pathname}`;
   const win = currentWindow();
   if (newWindow || !win) {
-    const created = createWindow({ url, restoreState: !win });
+    const created = createWindow({ url, restoreState: !win, withSplash: !win });
     if (!mainWindow) mainWindow = created;
     return;
   }
@@ -220,7 +343,7 @@ function enforce(event, url) {
   const verdict = policy.classify(url);
   if (verdict.action === 'app') return;
   event.preventDefault();
-  if (verdict.action === 'external') shell.openExternal(url);
+  if (verdict.action === 'external') openExternal(url);
 }
 
 app.on('web-contents-created', (_event, contents) => {
@@ -239,7 +362,7 @@ app.on('web-contents-created', (_event, contents) => {
       // shares the session, like a new tab would.
       return { action: 'allow', overrideBrowserWindowOptions: windowOptions({ width: 1100, height: 760 }) };
     }
-    if (verdict.action === 'external') shell.openExternal(url);
+    if (verdict.action === 'external') openExternal(url);
     return { action: 'deny' };
   });
 
@@ -279,7 +402,10 @@ function scheduleReconnect(win, target) {
     if (!win.webContents.getURL().startsWith('file:')) return clearReconnect(win);
     if (await siteReachable()) {
       clearReconnect(win);
-      if (!win.isDestroyed()) win.loadURL(target);
+      if (!win.isDestroyed()) {
+        reconnected.add(win);
+        win.loadURL(target);
+      }
     }
     return undefined;
   }, 5000);
@@ -310,7 +436,8 @@ function showContextMenu(win, params) {
 
   if (params.linkURL) {
     if (isOpenableExternally(params.linkURL)) {
-      template.push({ label: 'Open Link in Browser', click: () => shell.openExternal(params.linkURL) });
+      const label = params.linkURL.startsWith('mailto:') ? 'Send Email' : 'Open Link in Browser';
+      template.push({ label, click: () => openExternal(params.linkURL) });
     }
     template.push({ label: 'Copy Link', click: () => clipboard.writeText(params.linkURL) }, { type: 'separator' });
   }
@@ -373,13 +500,39 @@ function registerIpc() {
       arch: process.arch,
       titleBarHeight: config.TITLEBAR_HEIGHT,
       chromeless: CHROMELESS,
+      isFullscreen: Boolean(BrowserWindow.fromWebContents(event.sender)?.isFullScreen()),
     };
   });
 
   ipcMain.handle('move:open-external', (event, url) => {
-    if (!fromAppPage(event) || !isOpenableExternally(url)) return false;
-    shell.openExternal(url);
-    return true;
+    if (!fromAppPage(event)) return false;
+    return openExternal(url);
+  });
+
+  // A notification from the page was clicked (see the Notification wrap in
+  // src/preload.js), or the site asked to be brought forward.
+  ipcMain.on('move:focus-window', (event) => {
+    if (!fromAppPage(event)) return;
+    focusWindow(BrowserWindow.fromWebContents(event.sender));
+  });
+
+  // The page's network interface went away or came back: the offline banner.
+  ipcMain.on('move:connectivity', (event, online) => {
+    if (!fromAppPage(event)) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (online) {
+      if (toasts.dismissKey(win, 'connectivity')) {
+        toasts.show(win, { key: 'connectivity', variant: 'success', title: 'Back online', detail: 'You’re connected again.' });
+      }
+      return;
+    }
+    toasts.show(win, {
+      key: 'connectivity',
+      variant: 'warning',
+      title: 'You’re offline',
+      detail: 'Changes may not save until your connection is back.',
+      dismissible: true,
+    });
   });
 
   // The unread count, pushed by the site whenever it changes. On Windows the
@@ -412,20 +565,45 @@ function registerIpc() {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+// Follow the system theme: window backgrounds always, and the Windows caption
+// buttons only while the shell's own pages are showing — once the site has
+// loaded it owns their colours (desktop_titlebar_controller).
+function applySystemTheme() {
+  const colors = config.themeColors(isDark());
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.setBackgroundColor(colors.background);
+    if (process.platform !== 'win32') continue;
+    const url = win.webContents.getURL();
+    if (splashActive(win) || !url || url.startsWith('file:')) {
+      win.setTitleBarOverlay({ color: colors.background, symbolColor: colors.symbol, height: config.TITLEBAR_HEIGHT });
+    }
+  }
+}
+
 function onReady() {
   // Identify as the desktop app without touching the real Chrome UA.
   app.userAgentFallback = `${app.userAgentFallback} ${config.UA_MARKER_PREFIX}${app.getVersion()}`;
 
   permissions.install(session.defaultSession, { isAppUrl: policy.isAppUrl, desktopCapturer });
   registerIpc();
+  toasts.install({
+    ipcMain,
+    // The site, and the bundled offline page; never a provider's page.
+    isToastPage: (url) => policy.isAppUrl(url) || (typeof url === 'string' && url.startsWith('file:')),
+  });
+
+  // The window (and its splash) first: everything below can wait a frame.
+  mainWindow = createWindow({ url: START_URL, restoreState: true, withSplash: true });
+
   menu.build({
     getWindow: currentWindow,
     goHome: ({ newWindow }) => openInApp('/', { newWindow }),
     openInApp: (pathname) => openInApp(pathname),
+    openExternal,
+    search: runSearch,
     checkForUpdates: () => updater.checkInteractively(),
   });
-
-  mainWindow = createWindow({ url: START_URL, restoreState: true });
+  nativeTheme.on('updated', applySystemTheme);
 
   // Launched by a deep link (Windows passes it in argv; macOS via open-url).
   const argvLink = deepLinks.findDeepLinkInArgv(process.argv, DEEP_LINK);
@@ -435,12 +613,17 @@ function onReady() {
     pendingDeepLink = null;
   }
 
-  updater.start({ getWindow: currentWindow });
+  updater.start({
+    getWindow: currentWindow,
+    // Update notices as toasts; the updater falls back to a dialog when the
+    // window cannot show one (it is on a provider's page, or there is none).
+    notify: (options) => toasts.show(currentWindow(), options),
+  });
 }
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    mainWindow = createWindow({ url: START_URL, restoreState: true });
+    mainWindow = createWindow({ url: START_URL, restoreState: true, withSplash: true });
   } else {
     focusMainWindow();
   }

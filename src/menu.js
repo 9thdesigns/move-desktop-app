@@ -1,12 +1,18 @@
 'use strict';
 
-// Native menu bar: standard roles plus Back / Forward / Home and Help links.
+// Native menu bar: standard roles plus Back / Forward / Home, the site's main
+// sections, Search, Settings and Help links. Every accelerator comes from
+// src/shortcuts.js, which is unit tested for conflicts.
 
-const { Menu, app, shell } = require('electron');
+const { Menu, app } = require('electron');
 const { APP_NAME, HELP_URL, RELEASES_URL } = require('./config');
+const { shortcutMap } = require('./shortcuts');
 
-function build({ getWindow, goHome, openInApp, checkForUpdates }) {
+function build({ getWindow, goHome, openInApp, openExternal, search, checkForUpdates }) {
   const isMac = process.platform === 'darwin';
+  const keys = shortcutMap(process.platform);
+  // A second binding for an item: hidden, but its accelerator still fires.
+  const alias = (entry, item) => (entry ? [{ ...item, accelerator: entry.accelerator, visible: false, acceleratorWorksWhenHidden: true }] : []);
 
   const withWindow = (fn) => () => {
     const win = getWindow();
@@ -24,6 +30,8 @@ function build({ getWindow, goHome, openInApp, checkForUpdates }) {
               { role: 'about' },
               checkForUpdatesItem,
               { type: 'separator' },
+              { label: 'Settings…', accelerator: keys.settings.accelerator, click: () => openInApp(keys.settings.path) },
+              { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },
               { role: 'hide' },
@@ -40,10 +48,13 @@ function build({ getWindow, goHome, openInApp, checkForUpdates }) {
       submenu: [
         {
           label: 'New Window',
-          accelerator: 'CmdOrCtrl+N',
+          accelerator: keys.newWindow.accelerator,
           click: () => goHome({ newWindow: true }),
         },
         { type: 'separator' },
+        ...(isMac
+          ? []
+          : [{ label: 'Settings', accelerator: keys.settings.accelerator, click: () => openInApp(keys.settings.path) }, { type: 'separator' }]),
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },
@@ -64,15 +75,26 @@ function build({ getWindow, goHome, openInApp, checkForUpdates }) {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
+        { role: 'reload', accelerator: keys.reload.accelerator },
+        ...alias(keys.reloadAlt, { role: 'reload' }),
+        { role: 'forceReload', accelerator: keys.forceReload.accelerator },
         ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }]),
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        {
+          label: 'Search…',
+          accelerator: keys.search.accelerator,
+          // The site owns Cmd/Ctrl+K (src/shortcuts.js): shown here, never
+          // taken from the page.
+          registerAccelerator: false,
+          click: () => search(),
+        },
         { type: 'separator' },
-        { role: 'togglefullscreen' },
+        { role: 'resetZoom', accelerator: keys.resetZoom.accelerator },
+        { role: 'zoomIn', accelerator: keys.zoomIn.accelerator },
+        ...alias(keys.zoomInAlt, { role: 'zoomIn' }),
+        { role: 'zoomOut', accelerator: keys.zoomOut.accelerator },
+        { type: 'separator' },
+        { role: 'togglefullscreen', accelerator: keys.fullscreen.accelerator },
       ],
     },
     {
@@ -80,21 +102,31 @@ function build({ getWindow, goHome, openInApp, checkForUpdates }) {
       submenu: [
         {
           label: 'Back',
-          accelerator: isMac ? 'Cmd+[' : 'Alt+Left',
+          accelerator: keys.back.accelerator,
           click: withWindow((win) => win.webContents.navigationHistory.goBack()),
         },
+        ...alias(keys.backAlt, { label: 'Back', click: withWindow((win) => win.webContents.navigationHistory.goBack()) }),
         {
           label: 'Forward',
-          accelerator: isMac ? 'Cmd+]' : 'Alt+Right',
+          accelerator: keys.forward.accelerator,
           click: withWindow((win) => win.webContents.navigationHistory.goForward()),
         },
+        ...alias(keys.forwardAlt, { label: 'Forward', click: withWindow((win) => win.webContents.navigationHistory.goForward()) }),
         { type: 'separator' },
         {
           label: 'Home',
-          accelerator: 'CmdOrCtrl+Shift+H',
+          accelerator: keys.home.accelerator,
           click: () => goHome({ newWindow: false }),
         },
       ],
+    },
+    {
+      label: 'Go',
+      submenu: keys.sections.map((section) => ({
+        label: section.label,
+        accelerator: section.accelerator,
+        click: () => openInApp(section.path),
+      })),
     },
     {
       label: 'Window',
@@ -107,10 +139,10 @@ function build({ getWindow, goHome, openInApp, checkForUpdates }) {
     {
       role: 'help',
       submenu: [
-        { label: `${APP_NAME} Help`, click: () => shell.openExternal(HELP_URL) },
+        { label: `${APP_NAME} Help`, click: () => openExternal(HELP_URL) },
         { label: 'Contact Support', click: () => openInApp('/support') },
         { type: 'separator' },
-        { label: 'Release Notes', click: () => shell.openExternal(RELEASES_URL) },
+        { label: 'Release Notes', click: () => openExternal(RELEASES_URL) },
         ...(isMac
           ? []
           : [
