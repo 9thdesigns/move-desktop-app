@@ -18,18 +18,16 @@ deploy.
 | Job | Where |
 | --- | --- |
 | Opens on `/welcome`, remembers window bounds between launches | `src/main.js`, `src/window-state.js` |
-| Navigation policy: the site and its subdomains load in-app; OAuth providers load in-app only on their real auth endpoints (GitHub: only `/login`, `/login/oauth/*`, `/session`); everything else opens in the system browser or mail client — http, https and mailto only | `src/navigation.js` |
+| Navigation policy: the site and its subdomains load in-app; OAuth providers load in-app only on their real auth endpoints (GitHub: only `/login`, `/login/oauth/*`, `/session`); everything else opens in the system browser, http/https only | `src/navigation.js` |
 | Identifies itself by appending `Move-Desktop/<version>` to the real Chrome user agent — the Rails app keys `desktop_app?` off it | `src/main.js` |
-| Launch splash laid over the window while the site loads in parallel; gone the moment the page is ready. After ~15 s it offers Retry; offline it says so and retries on its own | `src/splash.js`, `src/splash-state.js`, `src/splash.html` |
-| Bundled offline page with automatic reconnect when the site can't be reached after launch | `src/offline.html` |
-| Shell notices (update ready, offline / back online, errors) as toasts in the page, styled after the Configure My AI flash toasts | `src/toasts.js`, `src/toast-queue.js`, `src/preload.js` |
+| Bundled offline page with automatic reconnect when the site can't be reached | `src/offline.html` |
 | Chromeless window: `hiddenInset` + traffic lights on macOS, `hidden` + Window Controls Overlay on Windows. The site renders the 38px draggable strip | `titleBarOptions()` in `src/main.js` |
 | Permissions: only notifications, fullscreen, microphone/camera and clipboard write, and only for m0ve.app | `src/permissions.js` |
-| Auto-update via `electron-updater`: quiet background checks, a "Restart" toast when a build has downloaded (dialog if the window can't show one), Help → Check for Updates… | `src/updater.js` |
-| Native menu bar: Back / Forward (Cmd/Ctrl+[ ]), Home, Cmd/Ctrl+1–5 for Home, Calendars, Spaces, Messages, Notifications, Search (the site's own Cmd/Ctrl+K), Settings (Cmd/Ctrl+,), zoom, Help links | `src/menu.js`, `src/shortcuts.js` |
+| Auto-update via `electron-updater`: quiet background checks, "Restart Now / Later" when a build has downloaded, Help → Check for Updates… | `src/updater.js` |
+| Native menu bar with Back / Forward / Home and Help links | `src/menu.js` |
 | `move-desktop://open?path=/…` deep link that brings the user back after a flow that had to run in the system browser (Google OAuth) | `src/deep-links.js` |
 | Unread count on the app icon: a numeric Dock badge on macOS, a drawn taskbar overlay on Windows. The site pushes the number through the bridge | `src/badge.js` |
-| `window.moveDesktop` bridge for the site (`openExternal`, `setTitleBarOverlay`, `setBadgeCount`, `isFullscreen` / `onFullscreenChange`, `focusWindow`, version); `html[data-desktop-fullscreen]` for CSS | `src/preload.js` |
+| `window.moveDesktop` bridge for the site (`openExternal`, `setTitleBarOverlay`, `setBadgeCount`, version) | `src/preload.js` |
 
 ## Develop
 
