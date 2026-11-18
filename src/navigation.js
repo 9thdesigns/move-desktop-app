@@ -7,7 +7,7 @@
 // `will-navigate`, `will-redirect` and `setWindowOpenHandler`.
 //
 //   'app'      – load inside the app window
-//   'external' – hand to the system browser (http/https only)
+//   'external' – hand to the system browser / mail client (http, https, mailto)
 //   'deny'     – drop it (unknown scheme, unparseable, file:, …)
 
 // Hosts that may load inside the window because they are one leg of an OAuth,
@@ -82,11 +82,23 @@ function parseUrl(value) {
   }
 }
 
-// http(s) is the only thing we ever hand to shell.openExternal. Never pass an
-// arbitrary scheme to the OS.
+// The only schemes ever handed to shell.openExternal. Never pass an arbitrary
+// scheme to the OS: `file:`, `ms-msdt:`, `smb:` and friends are how a link
+// turns into code execution.
+const EXTERNAL_SCHEMES = new Set(['https:', 'http:', 'mailto:']);
+const MAX_EXTERNAL_URL_LENGTH = 4096;
+// Raw control characters and whitespace never belong in a URL we pass on;
+// WHATWG parsing strips some of them silently, so check the input itself.
+const UNSAFE_URL_CHARS = /[\x00-\x20\x7f]/;
+
 function isOpenableExternally(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_EXTERNAL_URL_LENGTH) return false;
+  if (UNSAFE_URL_CHARS.test(value)) return false;
   const url = parseUrl(value);
-  return Boolean(url && (url.protocol === 'https:' || url.protocol === 'http:'));
+  if (!url || !EXTERNAL_SCHEMES.has(url.protocol)) return false;
+  // A mailto: needs somebody to write to; an http(s) URL needs a host.
+  if (url.protocol === 'mailto:') return url.pathname.length > 0;
+  return url.hostname.length > 0 && url.username === '' && url.password === '';
 }
 
 function createPolicy({ appOrigin }) {
@@ -104,6 +116,9 @@ function createPolicy({ appOrigin }) {
   function classify(value) {
     const url = parseUrl(value);
     if (!url) return { action: 'deny', reason: 'unparseable' };
+    if (url.protocol === 'mailto:') {
+      return isOpenableExternally(String(value)) ? { action: 'external', reason: 'mailto' } : { action: 'deny', reason: 'mailto-invalid' };
+    }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return { action: 'deny', reason: 'scheme' };
     if (isAppHost(url.hostname)) return { action: 'app', reason: 'app-host' };
 
@@ -115,4 +130,4 @@ function createPolicy({ appOrigin }) {
   return { appHost, appOrigin: app.origin, isAppHost, isAppUrl, classify };
 }
 
-module.exports = { OAUTH_HOSTS, createPolicy, isOpenableExternally, pathAllowed };
+module.exports = { OAUTH_HOSTS, EXTERNAL_SCHEMES, createPolicy, isOpenableExternally, pathAllowed };
