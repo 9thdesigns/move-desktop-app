@@ -4,7 +4,8 @@
 //
 // Pure functions with no Electron dependency so the rules can be unit tested
 // (see test/navigation.test.js). main.js applies `classify()` in
-// `will-navigate`, `will-redirect` and `setWindowOpenHandler`.
+// `will-navigate` and `setWindowOpenHandler`, and `classifyRedirect()` in
+// `will-redirect`.
 //
 //   'app'      – load inside the app window
 //   'external' – hand to the system browser / mail client (http, https, mailto)
@@ -101,6 +102,14 @@ function isOpenableExternally(value) {
   return url.hostname.length > 0 && url.username === '' && url.password === '';
 }
 
+// The site's own file routes (Active Storage). For a signed-in viewer they
+// answer with a redirect to a short-lived, signed storage URL (S3 / CloudFront
+// in production). The site vouches for that one hop, so the file opens in the
+// app window that asked for it (the in-app file viewer's "Open in new tab")
+// instead of leaving a blank window behind and handing a signed URL to the
+// system browser.
+const STORAGE_ROUTE = /^\/rails\/active_storage\/(?:blobs|representations)\//;
+
 function createPolicy({ appOrigin }) {
   const app = new URL(appOrigin);
   const appHost = app.hostname;
@@ -127,7 +136,20 @@ function createPolicy({ appOrigin }) {
     return { action: 'external', reason: rules === undefined ? 'foreign-host' : 'oauth-host-other-path' };
   }
 
-  return { appHost, appOrigin: app.origin, isAppHost, isAppUrl, classify };
+  // A main-frame redirect from `fromUrl` (where the navigation currently is)
+  // to `toUrl`. Same rules as classify(), except that one hop from the site's
+  // file routes to an https storage URL stays in the app.
+  function classifyRedirect(fromUrl, toUrl) {
+    const verdict = classify(toUrl);
+    if (verdict.action !== 'external' || !isAppUrl(fromUrl)) return verdict;
+    const from = parseUrl(fromUrl);
+    const to = parseUrl(toUrl);
+    const storageHop = STORAGE_ROUTE.test(from.pathname) && to.protocol === 'https:' &&
+      to.username === '' && to.password === '' && isOpenableExternally(String(toUrl));
+    return storageHop ? { action: 'app', reason: 'storage-redirect' } : verdict;
+  }
+
+  return { appHost, appOrigin: app.origin, isAppHost, isAppUrl, classify, classifyRedirect };
 }
 
-module.exports = { OAUTH_HOSTS, EXTERNAL_SCHEMES, createPolicy, isOpenableExternally, pathAllowed };
+module.exports = { OAUTH_HOSTS, EXTERNAL_SCHEMES, STORAGE_ROUTE, createPolicy, isOpenableExternally, pathAllowed };
