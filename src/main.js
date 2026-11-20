@@ -339,20 +339,29 @@ function openInApp(pathname, { newWindow = false } = {}) {
 // Navigation policy — applied to every webContents the app ever creates
 // ---------------------------------------------------------------------------
 
-function enforce(event, url) {
-  const verdict = policy.classify(url);
-  if (verdict.action === 'app') return;
+function enforce(event, url, verdict = policy.classify(url)) {
+  if (verdict.action === 'app') return true;
   event.preventDefault();
   if (verdict.action === 'external') openExternal(url);
+  return false;
 }
+
+// Where each webContents' current main-frame navigation is, so a redirect can
+// be judged by the hop it comes from (see classifyRedirect).
+const navigationUrl = new WeakMap();
 
 app.on('web-contents-created', (_event, contents) => {
   contents.on('will-navigate', (event, url) => enforce(event, url));
+  contents.on('did-start-navigation', (details) => {
+    if (details && details.isMainFrame && !details.isSameDocument) navigationUrl.set(contents, details.url);
+  });
   // Server-side redirects don't fire will-navigate, so a site link that
-  // 302s to another host goes through here.
+  // 302s to another host goes through here. One hop from the site's own file
+  // routes to the storage host stays in-app; sub-frames (the file viewer's
+  // iframe) are not policed here, as before.
   contents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
     if (isMainFrame === false) return;
-    enforce(event, url);
+    if (enforce(event, url, policy.classifyRedirect(navigationUrl.get(contents), url))) navigationUrl.set(contents, url);
   });
 
   contents.setWindowOpenHandler(({ url }) => {

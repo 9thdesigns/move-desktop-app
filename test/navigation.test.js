@@ -109,3 +109,39 @@ test('a development origin makes localhost the app host', () => {
   assert.equal(dev.classify('https://m0ve.app/').action, 'external');
   assert.equal(dev.isAppUrl('http://localhost:3000/x'), true);
 });
+
+// The in-app file viewer's "Open in new tab": the site's guarded file route
+// redirects a signed-in viewer to a signed storage URL, which opens in the
+// app window instead of a blank window plus the system browser.
+test('one redirect hop from the site\'s file routes to the storage host stays in-app', () => {
+  const redirect = (from, to) => policy.classifyRedirect(from, to);
+  const s3 = 'https://move-uploads.s3.us-west-2.amazonaws.com/abc?response-content-disposition=inline&X-Amz-Signature=x';
+  for (const from of [
+    'https://m0ve.app/rails/active_storage/blobs/redirect/eyJfcmFpbHMi/contract.pdf?disposition=inline',
+    'https://m0ve.app/rails/active_storage/blobs/proxy/eyJfcmFpbHMi/contract.pdf',
+    'https://m0ve.app/rails/active_storage/representations/redirect/eyJ/eyJ/photo.png',
+  ]) {
+    assert.deepEqual(redirect(from, s3), { action: 'app', reason: 'storage-redirect' }, from);
+  }
+  assert.equal(redirect('https://m0ve.app/rails/active_storage/blobs/redirect/x/f.pdf', 'https://d111.cloudfront.net/f.pdf?Signature=x').action, 'app');
+});
+
+test('every other redirect is judged as before', () => {
+  const redirect = (from, to) => policy.classifyRedirect(from, to).action;
+  const s3 = 'https://move-uploads.s3.us-west-2.amazonaws.com/abc';
+  // Not from a file route, or not from the site at all.
+  assert.equal(redirect('https://m0ve.app/messages/12', s3), 'external');
+  assert.equal(redirect('https://m0ve.app/rails/active_storage/direct_uploads', s3), 'external');
+  assert.equal(redirect('https://m0ve.app/go?to=/rails/active_storage/blobs/x', s3), 'external');
+  assert.equal(redirect('https://evil.com/rails/active_storage/blobs/redirect/x', s3), 'external');
+  assert.equal(redirect(undefined, s3), 'external');
+  // Only https storage URLs without credentials; other schemes are still dropped.
+  const from = 'https://m0ve.app/rails/active_storage/blobs/redirect/x/f.pdf';
+  assert.equal(redirect(from, 'http://move-uploads.s3.amazonaws.com/abc'), 'external');
+  assert.equal(redirect(from, 'https://user:pw@evil.com/abc'), 'external');
+  assert.equal(redirect(from, 'file:///etc/passwd'), 'deny');
+  assert.equal(redirect(from, 'javascript:alert(1)'), 'deny');
+  // Site and OAuth targets keep their own verdicts.
+  assert.equal(redirect(from, 'https://m0ve.app/rails/active_storage/disk/x/f.pdf'), 'app');
+  assert.equal(redirect('https://m0ve.app/messages', 'https://accounts.google.com/o/oauth2/auth'), 'app');
+});
