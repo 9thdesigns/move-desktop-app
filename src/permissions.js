@@ -6,7 +6,8 @@
 //
 //   notifications              – in-app notifications
 //   fullscreen                 – video / focus mode
-//   media                      – microphone & camera for huddles and voice channels
+//   media                      – microphone & camera for huddles and voice channels,
+//                                camera for the share screen's "Scan QR code"
 //   clipboard-sanitized-write  – "Copy link" buttons (navigator.clipboard.writeText)
 //   geolocation                – the dashboard weather widget
 //
